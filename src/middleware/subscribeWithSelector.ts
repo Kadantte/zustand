@@ -1,22 +1,21 @@
-import { StateCreator, StoreMutatorIdentifier } from '../vanilla'
+import type { StateCreator, StoreMutatorIdentifier } from '../vanilla.ts'
 
 type SubscribeWithSelector = <
-  T extends object,
+  T,
   Mps extends [StoreMutatorIdentifier, unknown][] = [],
-  Mcs extends [StoreMutatorIdentifier, unknown][] = []
+  Mcs extends [StoreMutatorIdentifier, unknown][] = [],
 >(
   initializer: StateCreator<
     T,
     [...Mps, ['zustand/subscribeWithSelector', never]],
     Mcs
-  >
+  >,
 ) => StateCreator<T, Mps, [['zustand/subscribeWithSelector', never], ...Mcs]>
 
-type Write<T extends object, U extends object> = Omit<T, keyof U> & U
-type Cast<T, U> = T extends U ? T : U
+type Write<T, U> = Omit<T, keyof U> & U
 
 type WithSelectorSubscribe<S> = S extends { getState: () => infer T }
-  ? Write<S, StoreSubscribeWithSelector<Cast<T, object>>>
+  ? Write<S, StoreSubscribeWithSelector<T>>
   : never
 
 declare module '../vanilla' {
@@ -26,7 +25,7 @@ declare module '../vanilla' {
   }
 }
 
-type StoreSubscribeWithSelector<T extends object> = {
+type StoreSubscribeWithSelector<T> = {
   subscribe: {
     (listener: (selectedState: T, previousSelectedState: T) => void): () => void
     <U>(
@@ -35,20 +34,14 @@ type StoreSubscribeWithSelector<T extends object> = {
       options?: {
         equalityFn?: (a: U, b: U) => boolean
         fireImmediately?: boolean
-      }
+      },
     ): () => void
   }
 }
 
 type SubscribeWithSelectorImpl = <T extends object>(
-  storeInitializer: PopArgument<StateCreator<T, [], []>>
-) => PopArgument<StateCreator<T, [], []>>
-
-type PopArgument<T extends (...a: never[]) => unknown> = T extends (
-  ...a: [...infer A, infer _]
-) => infer R
-  ? (...a: A) => R
-  : never
+  storeInitializer: StateCreator<T, [], []>,
+) => StateCreator<T, [], []>
 
 const subscribeWithSelectorImpl: SubscribeWithSelectorImpl =
   (fn) => (set, get, api) => {

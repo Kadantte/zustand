@@ -1,13 +1,13 @@
-// eslint-disable-next-line import/named
-import { Draft, produce } from 'immer'
-import { StateCreator, StoreMutatorIdentifier } from '../vanilla'
+import { produce } from 'immer'
+import type { Draft } from 'immer'
+import type { StateCreator, StoreMutatorIdentifier } from '../vanilla.ts'
 
 type Immer = <
-  T extends object,
+  T,
   Mps extends [StoreMutatorIdentifier, unknown][] = [],
-  Mcs extends [StoreMutatorIdentifier, unknown][] = []
+  Mcs extends [StoreMutatorIdentifier, unknown][] = [],
 >(
-  initializer: StateCreator<T, [...Mps, ['zustand/immer', never]], Mcs>
+  initializer: StateCreator<T, [...Mps, ['zustand/immer', never]], Mcs>,
 ) => StateCreator<T, Mps, [['zustand/immer', never], ...Mcs]>
 
 declare module '../vanilla' {
@@ -17,48 +17,58 @@ declare module '../vanilla' {
   }
 }
 
-type Write<T extends object, U extends object> = Omit<T, keyof U> & U
-type Cast<T, U> = T extends U ? T : U
-type SkipTwo<T> = T extends []
+type Write<T, U> = Omit<T, keyof U> & U
+type SkipTwo<T> = T extends { length: 0 }
   ? []
-  : T extends [unknown]
-  ? []
-  : T extends [unknown?]
-  ? []
-  : T extends [unknown, unknown, ...infer A]
-  ? A
-  : T extends [unknown, unknown?, ...infer A]
-  ? A
-  : T extends [unknown?, unknown?, ...infer A]
-  ? A
-  : never
+  : T extends { length: 1 }
+    ? []
+    : T extends { length: 0 | 1 }
+      ? []
+      : T extends [unknown, unknown, ...infer A]
+        ? A
+        : T extends [unknown, unknown?, ...infer A]
+          ? A
+          : T extends [unknown?, unknown?, ...infer A]
+            ? A
+            : never
 
-type WithImmer<S> = Write<Cast<S, object>, StoreImmer<S>>
+type SetStateType<T extends unknown[]> = Exclude<T[0], (...args: any[]) => any>
+
+type WithImmer<S> = Write<S, StoreImmer<S>>
 
 type StoreImmer<S> = S extends {
-  getState: () => infer T
   setState: infer SetState
 }
-  ? SetState extends (...a: infer A) => infer Sr
+  ? SetState extends {
+      (...a: infer A1): infer Sr1
+      (...a: infer A2): infer Sr2
+    }
     ? {
+        // Ideally, we would want to infer the `nextStateOrUpdater` `T` type from the
+        // `A1` type, but this is infeasible since it is an intersection with
+        // a partial type.
         setState(
-          nextStateOrUpdater: T | Partial<T> | ((state: Draft<T>) => void),
-          shouldReplace?: boolean | undefined,
-          ...a: SkipTwo<A>
-        ): Sr
+          nextStateOrUpdater:
+            | SetStateType<A2>
+            | Partial<SetStateType<A2>>
+            | ((state: Draft<SetStateType<A2>>) => void),
+          shouldReplace?: false,
+          ...a: SkipTwo<A1>
+        ): Sr1
+        setState(
+          nextStateOrUpdater:
+            | SetStateType<A2>
+            | ((state: Draft<SetStateType<A2>>) => void),
+          shouldReplace: true,
+          ...a: SkipTwo<A2>
+        ): Sr2
       }
     : never
   : never
 
-type PopArgument<T extends (...a: never[]) => unknown> = T extends (
-  ...a: [...infer A, infer _]
-) => infer R
-  ? (...a: A) => R
-  : never
-
-type ImmerImpl = <T extends object>(
-  storeInitializer: PopArgument<StateCreator<T, [], []>>
-) => PopArgument<StateCreator<T, [], []>>
+type ImmerImpl = <T>(
+  storeInitializer: StateCreator<T, [], []>,
+) => StateCreator<T, [], []>
 
 const immerImpl: ImmerImpl = (initializer) => (set, get, store) => {
   type T = ReturnType<typeof initializer>
@@ -68,7 +78,7 @@ const immerImpl: ImmerImpl = (initializer) => (set, get, store) => {
       typeof updater === 'function' ? produce(updater as any) : updater
     ) as ((s: T) => T) | T | Partial<T>
 
-    return set(nextState as any, replace, ...a)
+    return set(nextState, replace as any, ...a)
   }
 
   return initializer(store.setState, get, store)

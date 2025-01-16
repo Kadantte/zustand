@@ -10,17 +10,15 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-node@v2
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '14'
-          cache: yarn
-      - run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
-      - run: yarn install --frozen-lockfile --check-files
-      - name: Test Build # we don't have any other workflows to test build
-        run: yarn build
-      - name: Test Default
-        run: yarn test:ci
+          node-version: 'lts/*'
+          cache: 'pnpm'
+      - run: pnpm install
+      - run: pnpm build # we don't have any other workflows to test build
+      - run: pnpm test:spec
 
   test_matrix:
     runs-on: ubuntu-latest
@@ -28,31 +26,22 @@ jobs:
       fail-fast: false
       matrix:
         react:
-          - 16.8.0
-          - 17.0.0
           - 18.0.0
           - 18.1.0
           - 18.2.0
-          - 18.3.0-next-5f34b051d-20220725
-          - 0.0.0-experimental-5f34b051d-20220725
+          - 18.3.1
+          - 19.0.0-rc.1
+          - 19.1.0-canary-3ce77d55-20250106
+          - 0.0.0-experimental-3ce77d55-20250106
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-node@v2
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '12'
-          cache: yarn
-      - run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
-      - run: yarn install --frozen-lockfile --check-files
-      - name: Install legacy testing-library
-        if: ${{ startsWith(matrix.react, '16.') || startsWith(matrix.react, '17.') }}
-        run: yarn add -D @testing-library/react@12.1.4
-      - name: Patch for React 16
-        if: ${{ startsWith(matrix.react, '16.') }}
+          node-version: 'lts/*'
+          cache: 'pnpm'
+      - run: pnpm install
+      - name: Test ${{ matrix.react }} ${{ matrix.devtools-skip }}
         run: |
-          sed -i~ '1s/^/import React from "react";/' tests/*.tsx
-          sed -i~ 's/automatic/classic/' babel.config.js
-          sed -i~ 's/automatic/classic/' .swcrc
-      - name: Test ${{ matrix.react }}
-        run: |
-          yarn add -D react@${{ matrix.react }} react-dom@${{ matrix.react }}
-          yarn test:ci
+          pnpm add -D react@${{ matrix.react }} react-dom@${{ matrix.react }}
+          pnpm test:spec

@@ -1,4 +1,12 @@
-import create, { StateCreator, StoreApi, UseBoundStore } from 'zustand'
+import { expect, it } from 'vitest'
+import { create } from 'zustand'
+import type {
+  StateCreator,
+  StoreApi,
+  StoreMutatorIdentifier,
+  UseBoundStore,
+} from 'zustand'
+import { persist } from 'zustand/middleware'
 
 it('can use exposed types', () => {
   type ExampleState = {
@@ -22,7 +30,7 @@ it('can use exposed types', () => {
     numGet: () => 2,
   }
   const partialFn: (state: ExampleState) => Partial<ExampleState> = (
-    state
+    state,
   ) => ({
     ...state,
     num: 2,
@@ -71,10 +79,9 @@ it('can use exposed types', () => {
     _stateSelector: (state: ExampleState) => number,
     _storeApi: StoreApi<ExampleState>,
     _subscribe: StoreApi<ExampleState>['subscribe'],
-    _destroy: StoreApi<ExampleState>['destroy'],
     _equalityFn: (a: ExampleState, b: ExampleState) => boolean,
     _stateCreator: StateCreator<ExampleState>,
-    _useBoundStore: UseBoundStore<StoreApi<ExampleState>>
+    _useBoundStore: UseBoundStore<StoreApi<ExampleState>>,
   ) {
     expect(true).toBeTruthy()
   }
@@ -88,10 +95,9 @@ it('can use exposed types', () => {
     selector,
     storeApi,
     storeApi.subscribe,
-    storeApi.destroy,
     equalityFn,
     stateCreator,
-    useBoundStore
+    useBoundStore,
   )
 })
 
@@ -187,4 +193,56 @@ it('state is covariant', () => {
     foo: string
     baz: string
   }> = store
+})
+
+it('StateCreator<T, [StoreMutatorIdentfier, unknown][]> is StateCreator<T, []>', () => {
+  interface State {
+    count: number
+    increment: () => void
+  }
+
+  const foo: <M extends [StoreMutatorIdentifier, unknown][]>() => StateCreator<
+    State,
+    M
+  > = () => (set, get) => ({
+    count: 0,
+    increment: () => {
+      set({ count: get().count + 1 })
+    },
+  })
+
+  create<State>()(persist(foo(), { name: 'prefix' }))
+})
+
+it('StateCreator subtyping', () => {
+  interface State {
+    count: number
+    increment: () => void
+  }
+
+  const foo: () => StateCreator<State, []> = () => (set, get) => ({
+    count: 0,
+    increment: () => {
+      set({ count: get().count + 1 })
+    },
+  })
+
+  create<State>()(persist(foo(), { name: 'prefix' }))
+
+  const _testSubtyping: StateCreator<State, [['zustand/persist', unknown]]> =
+    {} as StateCreator<State, []>
+})
+
+it('set state exists on store with readonly store', () => {
+  interface State {
+    count: number
+    increment: () => void
+  }
+
+  const useStore = create<State>()((set, get) => ({
+    count: 0,
+    increment: () => set({ count: get().count + 1 }),
+  }))
+
+  useStore.setState((state) => ({ ...state, count: state.count + 1 }))
 })

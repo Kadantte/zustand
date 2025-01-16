@@ -1,5 +1,15 @@
 import type {} from '@redux-devtools/extension'
-import { StateCreator, StoreApi, StoreMutatorIdentifier } from '../vanilla'
+import type {
+  StateCreator,
+  StoreApi,
+  StoreMutatorIdentifier,
+} from '../vanilla.ts'
+
+type Config = Parameters<
+  (Window extends { __REDUX_DEVTOOLS_EXTENSION__?: infer T }
+    ? T
+    : { connect: (param: any) => any })['connect']
+>[0]
 
 declare module '../vanilla' {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -15,66 +25,64 @@ type Message = {
   state?: any
 }
 
-type Write<T extends object, U extends object> = Omit<T, keyof U> & U
 type Cast<T, U> = T extends U ? T : U
-type TakeTwo<T> = T extends []
+type Write<T, U> = Omit<T, keyof U> & U
+type TakeTwo<T> = T extends { length: 0 }
   ? [undefined, undefined]
-  : T extends [unknown]
-  ? [...a0: T, a1: undefined]
-  : T extends [unknown?]
-  ? [...a0: T, a1: undefined]
-  : T extends [unknown, unknown]
-  ? T
-  : T extends [unknown, unknown?]
-  ? T
-  : T extends [unknown?, unknown?]
-  ? T
-  : T extends [infer A0, infer A1, ...unknown[]]
-  ? [A0, A1]
-  : T extends [infer A0, (infer A1)?, ...unknown[]]
-  ? [A0, A1?]
-  : T extends [(infer A0)?, (infer A1)?, ...unknown[]]
-  ? [A0?, A1?]
-  : never
+  : T extends { length: 1 }
+    ? [...a0: Cast<T, unknown[]>, a1: undefined]
+    : T extends { length: 0 | 1 }
+      ? [...a0: Cast<T, unknown[]>, a1: undefined]
+      : T extends { length: 2 }
+        ? T
+        : T extends { length: 1 | 2 }
+          ? T
+          : T extends { length: 0 | 1 | 2 }
+            ? T
+            : T extends [infer A0, infer A1, ...unknown[]]
+              ? [A0, A1]
+              : T extends [infer A0, (infer A1)?, ...unknown[]]
+                ? [A0, A1?]
+                : T extends [(infer A0)?, (infer A1)?, ...unknown[]]
+                  ? [A0?, A1?]
+                  : never
 
-type WithDevtools<S> = Write<Cast<S, object>, StoreDevtools<S>>
+type WithDevtools<S> = Write<S, StoreDevtools<S>>
 
+type Action =
+  | string
+  | {
+      type: string
+      [x: string | number | symbol]: unknown
+    }
 type StoreDevtools<S> = S extends {
-  setState: (...a: infer A) => infer Sr
+  setState: {
+    // capture both overloads of setState
+    (...a: infer Sa1): infer Sr1
+    (...a: infer Sa2): infer Sr2
+  }
 }
   ? {
-      setState(
-        ...a: [...a: TakeTwo<A>, actionType?: string | { type: unknown }]
-      ): Sr
+      setState(...a: [...a: TakeTwo<Sa1>, action?: Action]): Sr1
+      setState(...a: [...a: TakeTwo<Sa2>, action?: Action]): Sr2
     }
   : never
 
-export interface DevtoolsOptions {
+export interface DevtoolsOptions extends Config {
+  name?: string
   enabled?: boolean
   anonymousActionType?: string
-  name?: string
-  serialize?:
-    | boolean
-    | {
-        date?: boolean
-        regex?: boolean
-        undefined?: boolean
-        nan?: boolean
-        infinity?: boolean
-        error?: boolean
-        symbol?: boolean
-        map?: boolean
-        set?: boolean
-      }
+  store?: string
 }
 
 type Devtools = <
-  T extends object,
+  T,
   Mps extends [StoreMutatorIdentifier, unknown][] = [],
-  Mcs extends [StoreMutatorIdentifier, unknown][] = []
+  Mcs extends [StoreMutatorIdentifier, unknown][] = [],
+  U = T,
 >(
-  initializer: StateCreator<T, [...Mps, ['zustand/devtools', never]], Mcs>,
-  devtoolsOptions?: DevtoolsOptions
+  initializer: StateCreator<T, [...Mps, ['zustand/devtools', never]], Mcs, U>,
+  devtoolsOptions?: DevtoolsOptions,
 ) => StateCreator<T, Mps, [['zustand/devtools', never], ...Mcs]>
 
 declare module '../vanilla' {
@@ -84,70 +92,138 @@ declare module '../vanilla' {
   }
 }
 
-type DevtoolsImpl = <T extends object>(
-  storeInitializer: PopArgument<StateCreator<T, [], []>>,
-  devtoolsOptions?: DevtoolsOptions
-) => PopArgument<StateCreator<T, [], []>>
+type DevtoolsImpl = <T>(
+  storeInitializer: StateCreator<T, [], []>,
+  devtoolsOptions?: DevtoolsOptions,
+) => StateCreator<T, [], []>
 
-type PopArgument<T extends (...a: never[]) => unknown> = T extends (
-  ...a: [...infer A, infer _]
-) => infer R
-  ? (...a: A) => R
-  : never
+export type NamedSet<T> = WithDevtools<StoreApi<T>>['setState']
 
-export type NamedSet<T extends object> = WithDevtools<StoreApi<T>>['setState']
+type Connection = ReturnType<
+  NonNullable<Window['__REDUX_DEVTOOLS_EXTENSION__']>['connect']
+>
+type ConnectionName = string | undefined
+type StoreName = string
+type StoreInformation = StoreApi<unknown>
+type ConnectionInformation = {
+  connection: Connection
+  stores: Record<StoreName, StoreInformation>
+}
+const trackedConnections: Map<ConnectionName, ConnectionInformation> = new Map()
+
+const getTrackedConnectionState = (
+  name: string | undefined,
+): Record<string, any> => {
+  const api = trackedConnections.get(name)
+  if (!api) return {}
+  return Object.fromEntries(
+    Object.entries(api.stores).map(([key, api]) => [key, api.getState()]),
+  )
+}
+
+const extractConnectionInformation = (
+  store: string | undefined,
+  extensionConnector: NonNullable<
+    (typeof window)['__REDUX_DEVTOOLS_EXTENSION__']
+  >,
+  options: Omit<DevtoolsOptions, 'enabled' | 'anonymousActionType' | 'store'>,
+) => {
+  if (store === undefined) {
+    return {
+      type: 'untracked' as const,
+      connection: extensionConnector.connect(options),
+    }
+  }
+  const existingConnection = trackedConnections.get(options.name)
+  if (existingConnection) {
+    return { type: 'tracked' as const, store, ...existingConnection }
+  }
+  const newConnection: ConnectionInformation = {
+    connection: extensionConnector.connect(options),
+    stores: {},
+  }
+  trackedConnections.set(options.name, newConnection)
+  return { type: 'tracked' as const, store, ...newConnection }
+}
 
 const devtoolsImpl: DevtoolsImpl =
   (fn, devtoolsOptions = {}) =>
   (set, get, api) => {
-    type S = ReturnType<typeof fn>
+    const { enabled, anonymousActionType, store, ...options } = devtoolsOptions
+
+    type S = ReturnType<typeof fn> & {
+      [store: string]: ReturnType<typeof fn>
+    }
     type PartialState = Partial<S> | ((s: S) => Partial<S>)
 
-    const { enabled, anonymousActionType, ...options } = devtoolsOptions
     let extensionConnector:
-      | typeof window['__REDUX_DEVTOOLS_EXTENSION__']
+      | (typeof window)['__REDUX_DEVTOOLS_EXTENSION__']
       | false
     try {
       extensionConnector =
-        (enabled ?? __DEV__) && window.__REDUX_DEVTOOLS_EXTENSION__
+        (enabled ?? import.meta.env?.MODE !== 'production') &&
+        window.__REDUX_DEVTOOLS_EXTENSION__
     } catch {
       // ignored
     }
 
     if (!extensionConnector) {
-      if (__DEV__ && enabled) {
-        console.warn(
-          '[zustand devtools middleware] Please install/enable Redux devtools extension'
-        )
-      }
       return fn(set, get, api)
     }
 
-    const extension = extensionConnector.connect(options)
+    const { connection, ...connectionInformation } =
+      extractConnectionInformation(store, extensionConnector, options)
 
     let isRecording = true
-    ;(api.setState as NamedSet<S>) = (state, replace, nameOrAction) => {
-      const r = set(state, replace)
+    ;(api.setState as any) = ((state, replace, nameOrAction: Action) => {
+      const r = set(state, replace as any)
       if (!isRecording) return r
-      extension.send(
+      const action: { type: string } =
         nameOrAction === undefined
           ? { type: anonymousActionType || 'anonymous' }
           : typeof nameOrAction === 'string'
-          ? { type: nameOrAction }
-          : nameOrAction,
-        get()
+            ? { type: nameOrAction }
+            : nameOrAction
+      if (store === undefined) {
+        connection?.send(action, get())
+        return r
+      }
+      connection?.send(
+        {
+          ...action,
+          type: `${store}/${action.type}`,
+        },
+        {
+          ...getTrackedConnectionState(options.name),
+          [store]: api.getState(),
+        },
       )
       return r
-    }
+    }) as NamedSet<S>
+
     const setStateFromDevtools: StoreApi<S>['setState'] = (...a) => {
       const originalIsRecording = isRecording
       isRecording = false
-      set(...a)
+      set(...(a as Parameters<typeof set>))
       isRecording = originalIsRecording
     }
 
     const initialState = fn(api.setState, get, api)
-    extension.init(initialState)
+    if (connectionInformation.type === 'untracked') {
+      connection?.init(initialState)
+    } else {
+      connectionInformation.stores[connectionInformation.store] = api
+      connection?.init(
+        Object.fromEntries(
+          Object.entries(connectionInformation.stores).map(([key, store]) => [
+            key,
+            key === connectionInformation.store
+              ? initialState
+              : store.getState(),
+          ]),
+        ),
+      )
+    }
 
     if (
       (api as any).dispatchFromDevtools &&
@@ -157,13 +233,13 @@ const devtoolsImpl: DevtoolsImpl =
       const originalDispatch = (api as any).dispatch
       ;(api as any).dispatch = (...a: any[]) => {
         if (
-          __DEV__ &&
+          import.meta.env?.MODE !== 'production' &&
           a[0].type === '__setState' &&
           !didWarnAboutReservedActionType
         ) {
           console.warn(
             '[zustand devtools middleware] "__setState" action type is reserved ' +
-              'to set state from the devtools. Avoid using it.'
+              'to set state from the devtools. Avoid using it.',
           )
           didWarnAboutReservedActionType = true
         }
@@ -172,10 +248,10 @@ const devtoolsImpl: DevtoolsImpl =
     }
 
     ;(
-      extension as unknown as {
+      connection as unknown as {
         // FIXME https://github.com/reduxjs/redux-devtools/issues/1097
         subscribe: (
-          listener: (message: Message) => void
+          listener: (message: Message) => void,
         ) => (() => void) | undefined
       }
     ).subscribe((message: any) => {
@@ -183,7 +259,7 @@ const devtoolsImpl: DevtoolsImpl =
         case 'ACTION':
           if (typeof message.payload !== 'string') {
             console.error(
-              '[zustand devtools middleware] Unsupported action format'
+              '[zustand devtools middleware] Unsupported action format',
             )
             return
           }
@@ -191,35 +267,81 @@ const devtoolsImpl: DevtoolsImpl =
             message.payload,
             (action) => {
               if (action.type === '__setState') {
-                setStateFromDevtools(action.state as PartialState)
+                if (store === undefined) {
+                  setStateFromDevtools(action.state as PartialState)
+                  return
+                }
+                if (Object.keys(action.state as S).length !== 1) {
+                  console.error(
+                    `
+                    [zustand devtools middleware] Unsupported __setState action format.
+                    When using 'store' option in devtools(), the 'state' should have only one key, which is a value of 'store' that was passed in devtools(),
+                    and value of this only key should be a state object. Example: { "type": "__setState", "state": { "abc123Store": { "foo": "bar" } } }
+                    `,
+                  )
+                }
+                const stateFromDevtools = (action.state as S)[store]
+                if (
+                  stateFromDevtools === undefined ||
+                  stateFromDevtools === null
+                ) {
+                  return
+                }
+                if (
+                  JSON.stringify(api.getState()) !==
+                  JSON.stringify(stateFromDevtools)
+                ) {
+                  setStateFromDevtools(stateFromDevtools)
+                }
                 return
               }
 
               if (!(api as any).dispatchFromDevtools) return
               if (typeof (api as any).dispatch !== 'function') return
               ;(api as any).dispatch(action)
-            }
+            },
           )
 
         case 'DISPATCH':
           switch (message.payload.type) {
             case 'RESET':
-              setStateFromDevtools(initialState)
-              return extension.init(api.getState())
+              setStateFromDevtools(initialState as S)
+              if (store === undefined) {
+                return connection?.init(api.getState())
+              }
+              return connection?.init(getTrackedConnectionState(options.name))
 
             case 'COMMIT':
-              return extension.init(api.getState())
+              if (store === undefined) {
+                connection?.init(api.getState())
+                return
+              }
+              return connection?.init(getTrackedConnectionState(options.name))
 
             case 'ROLLBACK':
               return parseJsonThen<S>(message.state, (state) => {
-                setStateFromDevtools(state)
-                extension.init(api.getState())
+                if (store === undefined) {
+                  setStateFromDevtools(state)
+                  connection?.init(api.getState())
+                  return
+                }
+                setStateFromDevtools(state[store] as S)
+                connection?.init(getTrackedConnectionState(options.name))
               })
 
             case 'JUMP_TO_STATE':
             case 'JUMP_TO_ACTION':
               return parseJsonThen<S>(message.state, (state) => {
-                setStateFromDevtools(state)
+                if (store === undefined) {
+                  setStateFromDevtools(state)
+                  return
+                }
+                if (
+                  JSON.stringify(api.getState()) !==
+                  JSON.stringify(state[store])
+                ) {
+                  setStateFromDevtools(state[store] as S)
+                }
               })
 
             case 'IMPORT_STATE': {
@@ -227,10 +349,14 @@ const devtoolsImpl: DevtoolsImpl =
               const lastComputedState =
                 nextLiftedState.computedStates.slice(-1)[0]?.state
               if (!lastComputedState) return
-              setStateFromDevtools(lastComputedState)
-              extension.send(
+              if (store === undefined) {
+                setStateFromDevtools(lastComputedState)
+              } else {
+                setStateFromDevtools(lastComputedState[store])
+              }
+              connection?.send(
                 null as any, // FIXME no-any
-                nextLiftedState
+                nextLiftedState,
               )
               return
             }
@@ -253,7 +379,7 @@ const parseJsonThen = <T>(stringified: string, f: (parsed: T) => void) => {
   } catch (e) {
     console.error(
       '[zustand devtools middleware] Could not parse the received json',
-      e
+      e,
     )
   }
   if (parsed !== undefined) f(parsed as T)

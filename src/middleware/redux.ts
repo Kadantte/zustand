@@ -1,31 +1,28 @@
-import { StateCreator, StoreMutatorIdentifier } from '../vanilla'
-import { NamedSet } from './devtools'
+import type { StateCreator, StoreMutatorIdentifier } from '../vanilla.ts'
+import type { NamedSet } from './devtools.ts'
 
-type Write<T extends object, U extends object> = Omit<T, keyof U> & U
-type Cast<T, U> = T extends U ? T : U
+type Write<T, U> = Omit<T, keyof U> & U
 
-type Action = {
-  type: unknown
-}
+type Action = { type: string }
 
-type ReduxState<A extends Action> = {
-  dispatch: StoreRedux<A>['dispatch']
-}
-
-type StoreRedux<A extends Action> = {
+type StoreRedux<A> = {
   dispatch: (a: A) => A
   dispatchFromDevtools: true
 }
 
-type WithRedux<S, A> = Write<Cast<S, object>, StoreRedux<Cast<A, Action>>>
+type ReduxState<A> = {
+  dispatch: StoreRedux<A>['dispatch']
+}
+
+type WithRedux<S, A> = Write<S, StoreRedux<A>>
 
 type Redux = <
-  T extends object,
+  T,
   A extends Action,
-  Cms extends [StoreMutatorIdentifier, unknown][] = []
+  Cms extends [StoreMutatorIdentifier, unknown][] = [],
 >(
   reducer: (state: T, action: A) => T,
-  initialState: T
+  initialState: T,
 ) => StateCreator<Write<T, ReduxState<A>>, Cms, [['zustand/redux', A]]>
 
 declare module '../vanilla' {
@@ -34,16 +31,10 @@ declare module '../vanilla' {
   }
 }
 
-type PopArgument<T extends (...a: never[]) => unknown> = T extends (
-  ...a: [...infer A, infer _]
-) => infer R
-  ? (...a: A) => R
-  : never
-
-type ReduxImpl = <T extends object, A extends Action>(
+type ReduxImpl = <T, A extends Action>(
   reducer: (state: T, action: A) => T,
-  initialState: T
-) => PopArgument<StateCreator<T & ReduxState<A>, [], []>>
+  initialState: T,
+) => StateCreator<T & ReduxState<A>, [], []>
 
 const reduxImpl: ReduxImpl = (reducer, initial) => (set, _get, api) => {
   type S = typeof initial
@@ -56,4 +47,4 @@ const reduxImpl: ReduxImpl = (reducer, initial) => (set, _get, api) => {
 
   return { dispatch: (...a) => (api as any).dispatch(...a), ...initial }
 }
-export const redux = reduxImpl as Redux
+export const redux = reduxImpl as unknown as Redux
